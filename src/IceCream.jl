@@ -12,29 +12,54 @@ struct FrameInfo
     argvals::Tuple
 end
 
+
+function reconstruct!(exprs, upto)
+    replaces = Dict{Core.SSAValue, Expr}()
+    function recurse_replace(expr)
+        if !(expr isa Expr)
+            return
+        end
+        for (i, arg) in enumerate(expr.args)
+            if haskey(replaces, arg)
+                expr.args[i] = replaces[arg]
+            end
+            if arg isa Expr
+                recurse_replace(arg)
+            end
+        end
+        return expr
+    end
+    for i = 1:upto
+        replaces[Core.SSAValue(i)] = recurse_replace(exprs[i])
+    end
+    return exprs[upto]
+end
+
 function current_frame_info(args...)
     traces = stacktrace()
     for frame in traces
-        #= for prop in propertynames(frame) =#
-        #=     @info prop, getproperty(frame, prop) =#
-        #= end =#
         if !hasproperty(frame.linfo, :code)
             continue
         end
         code = frame.linfo.code
-        #= println(frame.linfo.code) =#
-        for expr in code
+        @info frame.linfo
+        for (i, expr) in enumerate(code)
             if expr isa Expr && expr.head == :call && first(expr.args) == :ic
                 file = string(frame.file)
                 line = frame.line
                 func = frame.func
+                if occursin("%", string(expr))
+                    reconstruct!(code, i)
+                end
                 argnames = Tuple(arg isa Union{Expr, Symbol} ? arg : nothing
                                  for arg in expr.args[2:end])
                 return FrameInfo(file, line, func, now(), argnames, args)
             end
         end
     end
+    error("WHAT?")
 end
+
 @kwdef struct IceCreamDebugger
     prefix::String = "ic| "
     time_format::String = "HH:MM:SS.ss"
@@ -50,7 +75,8 @@ function format_kv(k, v)
 end
 
 
-function (ic::IceCreamDebugger)(frame::FrameInfo)
+function (ic::IceCreamDebugger)(args...)
+    frame = current_frame_info(args...)
     nargs = length(frame.argnames)
     if nargs == 0
         file = basename(frame.file)
@@ -71,10 +97,6 @@ function (ic::IceCreamDebugger)(frame::FrameInfo)
         end
         @info read(seekstart(buffer), String)
     end
-end
-
-function (ic::IceCreamDebugger)(args...)
-    ic(current_frame_info(args...))
 end
 
 const ic = IceCreamDebugger()
